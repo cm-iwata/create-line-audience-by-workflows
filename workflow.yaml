@@ -1,0 +1,51 @@
+main:
+  params: [ args ]
+  steps:
+    - init:
+        assign:
+          - project_id: $${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - secret_id: ${secretId}
+    - exec_query:
+        call: googleapis.bigquery.v2.jobs.query
+        args:
+          projectId: $${project_id}
+          body:
+            query: |
+                SELECT
+                  TO_JSON_STRING(
+                    ARRAY_AGG(
+                      JSON_OBJECT('id', id)
+                    )
+                  ) AS audiences
+                FROM
+                  ${dataset}.${table}
+                WHERE
+                  pref = '兵庫県'
+            useLegacySql: false
+        result: query_result
+    - fetch_client_secret:
+        call: googleapis.secretmanager.v1.projects.secrets.versions.access
+        args:
+            name: $${"projects/" + project_id + "/secrets/" + secret_id + "/versions/latest"}
+        result: fetch_secret_result
+    - fetch_token:
+        call: http.post
+        args:
+            url: https://api.line.me/v2/oauth/accessToken
+            headers:
+              Content-Type: application/x-www-form-urlencoded
+            body:
+              grant_type: client_credentials
+              client_id: ${lineClientId}
+              client_secret: $${ text.decode(base64.decode(fetch_secret_result.payload.data)) }
+        result: fetch_token_result
+    - create_audience:
+        call: http.post
+        args:
+            url: https://api.line.me/v2/bot/audienceGroup/upload
+            headers:
+              Authorization: $${"Bearer " + fetch_token_result.body.access_token}
+            body:
+              description: Test From Google Cloud
+              uploadDescription: Google CloudのWorkflowから作成
+              audiences: $${json.decode(query_result.rows[0].f[0].v)}
